@@ -1,6 +1,6 @@
 # MySQL MCP Server (PHP)
 
-A [Model Context Protocol](https://modelcontextprotocol.io) server written in PHP that gives your AI assistant controlled access to a MySQL database, with three enforced access levels that only the human operator can change.
+A [Model Context Protocol](https://modelcontextprotocol.io) server written in PHP that gives your AI assistant controlled access to MySQL databases, with three enforced access levels that only the human operator can change. Supports multiple databases — list, switch, and query across all databases on the server.
 
 ## Architecture
 
@@ -9,7 +9,9 @@ AI assistant (MCP Host)
   └─ stdio pipe ─── server.php (PHP process)
                          ├─ AccessControl  ← reads HMAC-signed sentinel file
                          ├─ SqlValidator   ← classifies SQL before execution
-                         └─ PDO → MySQL
+                         └─ MySqlConnection (PDO singleton) → MySQL
+                              ├─ tracks current database in-memory
+                              └─ transparent reconnect with database restore
 ```
 
 The AI assistant has **no tool to change the access level**. Level changes happen exclusively via `set-level.php`, run by the operator in a separate terminal.
@@ -18,7 +20,7 @@ The AI assistant has **no tool to change the access level**. Level changes happe
 
 | Level   | Allowed SQL                                              |
 |---------|----------------------------------------------------------|
-| `read`  | SELECT, SHOW, DESCRIBE, EXPLAIN                          |
+| `read`  | SELECT, SHOW, DESCRIBE, EXPLAIN, USE                     |
 | `write` | read + INSERT, UPDATE, DELETE, REPLACE                   |
 | `admin` | write + CREATE, DROP, ALTER, TRUNCATE, GRANT, REVOKE ... |
 
@@ -70,7 +72,7 @@ mysql-mcp-server/
 │   ├── Config.php              # Env variable wrapper
 │   ├── AccessControl.php       # HMAC-signed level read/write + PIN verify
 │   ├── SqlValidator.php        # SQL statement type detection
-│   ├── MySqlConnection.php     # PDO singleton
+│   ├── MySqlConnection.php     # PDO singleton with database tracking
 │   └── MySqlTools.php          # MCP tool definitions (#[McpTool])
 └── storage/
     └── access_level.json       # Runtime level state (auto-created)
@@ -167,12 +169,24 @@ Restart Codex after saving.
 
 ## Available Tools
 
-| Tool               | Description                                      | Min Level |
-|--------------------|--------------------------------------------------|-----------|
-| `execute_sql`      | Execute a SQL statement (level-enforced)         | dynamic   |
-| `list_tables`      | List all tables in the database                  | read      |
-| `describe_table`   | Describe columns of a specific table             | read      |
-| `get_access_level` | Return the current access level (read-only info) | read      |
+| Tool               | Description                                                  | Min Level |
+|--------------------|--------------------------------------------------------------|-----------|
+| `execute_sql`      | Execute a SQL statement (level-enforced)                     | dynamic   |
+| `list_tables`      | List all tables in the current database                      | read      |
+| `describe_table`   | Describe columns of a specific table                         | read      |
+| `get_access_level` | Return the current access level (read-only info)             | read      |
+| `list_databases`   | List all databases on the server (current one marked with *) | read      |
+| `use_database`     | Switch the active database for all subsequent queries        | read      |
+
+### Multi-Database Workflow
+
+The server supports working across multiple databases on the same MySQL server:
+
+1. **List databases** — call `list_databases` to see all available databases. The currently active one is marked with `*`.
+2. **Switch database** — call `use_database` with the target database name to switch. All subsequent queries (`execute_sql`, `list_tables`, `describe_table`) will operate on the new database.
+3. **Initial database** — if `DB_NAME` is set in `.env`, it becomes the default database on startup. If `DB_NAME` is empty or omitted, no database is selected until you call `use_database`.
+
+The database switch uses MySQL's `USE` statement internally — it is a lightweight session command that does not reconnect or re-authenticate. If the connection drops, the server automatically restores the selected database on reconnect.
 
 ## Testing with MCP Inspector
 
@@ -189,7 +203,8 @@ Opens a browser UI where you can call tools manually and inspect the JSON-RPC me
 | The AI escalating its own privileges | No level-change tool exists — zero API surface |
 | Forging `access_level.json` | HMAC-SHA256 signed with a secret key the AI never sees |
 | SQL injection via tool arguments | PDO real prepared statements (`ATTR_EMULATE_PREPARES = false`) |
-| Identifier injection in `describe_table` | Strict regex whitelist (`[a-zA-Z0-9_]`) + backtick quoting |
-| Comment-wrapped statement bypass | Comments stripped before keyword classification |
+| Identifier injection in `describe_table` / `use_database` | Strict regex whitelist (`[a-zA-Z0-9_]`) + backtick escaping (defense-in-depth) |
+| Comment-wrapped statement bypass | Comments stripped before keyword classification and USE interception |
 | Multi-statement execution (`SELECT 1; DROP TABLE x`) | Semicolon count guard → classified as `admin` |
+| Database switch via raw SQL (`USE db` in `execute_sql`) | Intercepted and redirected to `use_database` tool to prevent state desync |
 | Secrets in the AI config | Credentials live only in `.env`, loaded by the server itself |

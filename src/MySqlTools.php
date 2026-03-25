@@ -25,6 +25,15 @@ class MySqlTools
           return 'Error: SQL statement exceeds maximum allowed length (10,000 characters).';
         }
 
+        // Intercept USE statements — redirect to the dedicated tool to avoid
+        // a split-brain scenario where PDO switches databases but the
+        // in-memory $currentDatabase tracker is not updated.
+        // Strip comments first so that "/* */ USE db" cannot bypass detection.
+        if (preg_match('/^\s*USE\s+/i', SqlValidator::stripComments($sql))) {
+            return 'To switch databases, please use the use_database tool instead of writing USE statements directly. '
+                 . 'This ensures the server correctly tracks which database is active.';
+        }
+
         $level = AccessControl::getCurrentLevel();
 
         if (!SqlValidator::isAllowed($sql, $level)) {
@@ -52,21 +61,28 @@ class MySqlTools
     }
 
     /**
-     * List all tables in the connected database.
+     * List all tables in the currently active database.
+     * Shows the database name for context when working with multiple databases.
      */
     #[McpTool(name: 'list_tables')]
     public function listTables(): string
     {
         try {
-            $pdo  = MySqlConnection::get();
+            $pdo     = MySqlConnection::get();
+            $current = MySqlConnection::getCurrentDatabase();
+
+            if ($current === null) {
+                return 'No database selected. Use the use_database tool to select one first.';
+            }
+
             $stmt = $pdo->query('SHOW TABLES');
             $rows = $stmt->fetchAll(PDO::FETCH_COLUMN);
 
             if (empty($rows)) {
-                return 'No tables found in the database.';
+                return "No tables found in database '{$current}'.";
             }
 
-            return implode("\n", $rows);
+            return "Tables in '{$current}':\n" . implode("\n", $rows);
         } catch (\Exception $e) {
             return 'Error: ' . $e->getMessage();
         }
@@ -88,6 +104,11 @@ class MySqlTools
             return 'Error: invalid table name. Only letters, numbers, and underscores are allowed.';
         }
 
+        $current = MySqlConnection::getCurrentDatabase();
+        if ($current === null) {
+            return 'No database selected. Use the use_database tool to select one first.';
+        }
+
         try {
             $pdo  = MySqlConnection::get();
             // Backtick-quote the validated identifier
@@ -95,7 +116,7 @@ class MySqlTools
             $rows = $stmt->fetchAll();
 
             if (empty($rows)) {
-                return "Table '{$table}' not found or has no columns.";
+                return "Table '{$table}' not found in database '{$current}'.";
             }
 
             return $this->formatTable($rows);
@@ -120,6 +141,67 @@ class MySqlTools
         ];
 
         return 'Current access level: ' . ($map[$level] ?? $level);
+    }
+
+    /**
+     * List all databases available on the MySQL server.
+     * Returns only databases the connected user has permission to see.
+     * The currently active database is marked with an asterisk (*).
+     */
+    #[McpTool(name: 'list_databases')]
+    public function listDatabases(): string
+    {
+        try {
+            $pdo  = MySqlConnection::get();
+            $stmt = $pdo->query('SHOW DATABASES');
+            $rows = $stmt->fetchAll(PDO::FETCH_COLUMN);
+
+            if (empty($rows)) {
+                return 'No databases found (or insufficient privileges).';
+            }
+
+            $current = MySqlConnection::getCurrentDatabase();
+            $lines   = array_map(
+                fn(string $db) => ($db === $current ? '* ' : '  ') . $db,
+                $rows
+            );
+
+            $header = $current !== null
+                ? "Databases (current: {$current}):"
+                : 'Databases (no database selected):';
+
+            return $header . "\n" . implode("\n", $lines);
+        } catch (\Exception $e) {
+            return 'Error: ' . $e->getMessage();
+        }
+    }
+
+    /**
+     * Switch the active database for all subsequent queries.
+     * This does not require reconnecting — it uses MySQL's USE statement internally.
+     *
+     * @param string $database The name of the database to switch to
+     */
+    #[McpTool(name: 'use_database')]
+    public function useDatabase(string $database): string
+    {
+        if (!preg_match('/^[a-zA-Z0-9_]+$/', $database)) {
+            return 'Error: invalid database name. Only letters, numbers, and underscores are allowed.';
+        }
+
+        $level = AccessControl::getCurrentLevel();
+        if (!in_array($level, ['read', 'write', 'admin'], true)) {
+            return 'Access denied: unable to verify access level.';
+        }
+
+        try {
+            MySqlConnection::useDatabase($database);
+            return "Switched to database: {$database}";
+        } catch (\PDOException $e) {
+            return 'Error: ' . $e->getMessage();
+        } catch (\RuntimeException $e) {
+            return 'Error: ' . $e->getMessage();
+        }
     }
 
     // ── private helpers ───────────────────────────────────────────────────────

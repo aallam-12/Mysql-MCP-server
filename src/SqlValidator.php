@@ -14,7 +14,7 @@ class SqlValidator
 
     // Map each SQL operation category to the minimum level required
     private const OPERATION_LEVELS = [
-        'read'  => ['SELECT', 'SHOW', 'DESCRIBE', 'DESC', 'EXPLAIN', 'WITH'],
+        'read'  => ['SELECT', 'SHOW', 'DESCRIBE', 'DESC', 'EXPLAIN', 'WITH', 'USE'],
         'write' => ['INSERT', 'UPDATE', 'DELETE', 'REPLACE'],
         'admin' => ['CREATE', 'DROP', 'ALTER', 'TRUNCATE', 'RENAME',
                     'GRANT', 'REVOKE', 'SET', 'CALL', 'EXEC', 'EXECUTE',
@@ -66,7 +66,7 @@ class SqlValidator
         return 'admin'; // unknown keyword → safest default
     }
 
-    // ── private helpers ───────────────────────────────────────────────────────
+    // ── helpers ────────────────────────────────────────────────────────────────
 
     /**
      * Remove SQL comments before keyword extraction.
@@ -74,7 +74,7 @@ class SqlValidator
      * Order: block comments first, then line comments.
      * This prevents a line comment containing '*\/' from confusing block parsing.
      */
-    private static function stripComments(string $sql): string
+    public static function stripComments(string $sql): string
     {
         // Strip block comments: /* ... */  (non-greedy, dotall)
         $sql = preg_replace('!/\*.*?\*/!s', ' ', $sql);
