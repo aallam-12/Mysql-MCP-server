@@ -265,7 +265,7 @@ class MySqlTools
         }
 
         // Build header row
-        $line = $this->buildRow($headers, $widths, $headers);
+        $line = $this->buildRow($headers, $widths, array_combine($headers, $headers));
         $separator = '+' . implode('+', array_map(fn($w) => str_repeat('-', $w + 2), $widths)) . '+';
         $output = $separator . "\n" . $line . "\n" . $separator . "\n";
 
