@@ -167,6 +167,34 @@ Open (or create) `~/.codex/config.json` and add:
 
 Restart Codex after saving.
 
+**VS Code (GitHub Copilot):**
+
+Requires VS Code **≥ 1.99** and GitHub Copilot extension **v1.290+**.
+
+1. Press `Ctrl+Shift+P` → **"MCP: Add Server"**
+2. Select **"stdio (Run a command)"**
+3. Enter command: `php /absolute/path/to/mysql-mcp-server/server.php`
+4. Enter server name: `mysql`
+5. Save to: **Global (User Settings)**
+
+Then open `Ctrl+Shift+P` → **"Open User Settings (JSON)"** and add `cwd` to the generated entry:
+
+```json
+"github.copilot.chat.mcp.servers": {
+  "mysql": {
+    "type": "stdio",
+    "command": "php",
+    "args": ["/absolute/path/to/mysql-mcp-server/server.php"],
+    "cwd": "/absolute/path/to/mysql-mcp-server"
+  }
+}
+```
+
+- `cwd` is required so PHP can locate `.env` in its own directory.
+- Windows path example: `C:/wamp64/www/mysql-mcp-server`
+
+To activate: open Copilot Chat (`Ctrl+Alt+I`) → switch to **Agent mode** → click the **tools icon** (wrench) → toggle `mysql` on.
+
 ## Available Tools
 
 | Tool               | Description                                                  | Min Level |
